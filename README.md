@@ -1,0 +1,2 @@
+# privateusdkrw
+USD-KRW swing
