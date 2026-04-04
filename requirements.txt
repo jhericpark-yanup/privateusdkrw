@@ -1,0 +1,10 @@
+yfinance
+gspread
+google-auth
+pandas
+numpy
+scipy
+matplotlib
+requests
+scikit-learn
+schedule
