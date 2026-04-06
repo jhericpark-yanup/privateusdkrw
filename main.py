@@ -59,7 +59,7 @@ CONFIG = {
     "default_capital"  : 10_000_000,
 
     # ── Schedule ──────────────────────────────
-    "daily_report_time": "09:00",
+    "daily_report_time": "00:00",  # UTC 00:00 = KST 09:00
     "data_refresh_min" : 60,
     "poll_interval_sec": 2,
 }
@@ -725,11 +725,14 @@ def main():
         "  /exit                  — 청산\n"
         "  /status                — 현재 상태\n\n"
         "🔔 자동 알림\n"
-        "  • 매일 09:00 상세 일간 리포트\n"
+        "  • 매일 09:00 KST 상세 일간 리포트\n"
         "  • 스톱로스 90% 근접 시 경고\n"
         "  • 시스템 청산 신호 감지 시 추천"
     )
-    print(f"✅ 봇 시작 완료. 일간 리포트: 매일 {CONFIG['daily_report_time']} KST\n")
+    print(f"✅ 봇 시작 완료. 일간 리포트: 매일 09:00 KST (UTC 00:00)\n")
+
+    # 시작 직후 즉시 리포트 1회 발송 (정상 작동 확인용)
+    daily_report(data_ref, z_ref_global)
 
     my_chat_id = str(CONFIG["telegram_chat_id"])
 
