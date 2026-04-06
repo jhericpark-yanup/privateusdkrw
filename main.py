@@ -512,6 +512,9 @@ def handle_command(text: str, data: pd.DataFrame, z_entry: float) -> str:
         return "✅ 포지션 청산 완료."
 
     elif cmd == "/status":
+        # z_entry 안전하게 읽기
+        z_entry_now = z_ref_global.get("z_entry", CONFIG.get("z_entry_default", 1.0))
+
         pos    = read_position()
         pnl    = calc_pnl(data, pos)
         latest = data.iloc[-1]
@@ -527,20 +530,25 @@ def handle_command(text: str, data: pd.DataFrame, z_entry: float) -> str:
             f"📌 시스템   : {sig}"
         )
         if pnl:
+            # 포지션 보유 중 → 수익률 표시
             emoji = "📈" if pnl["pnl_pct"] >= 0 else "📉"
             part2 = (
                 f"\n══════════════════════\n💼 내 포지션\n"
+                f"──────────────────────\n"
                 f"  방향     : {pnl['direction']}\n"
                 f"  진입가   : {pnl['entry_price']:.1f}\n"
                 f"  현재가   : {pnl['current_price']:.1f}\n"
                 f"  보유기간 : {pnl['holding_days']}일\n"
+                f"  자본금   : {int(pnl['capital']):,}원\n"
                 f"{emoji} 수익률  : {pnl['pnl_pct']:+.3f}%\n"
                 f"💵 수익금액 : {int(pnl['pnl_krw']):+,}원\n"
-                f"  MFE     : {pnl['mfe_pct']:+.3f}%\n"
-                f"  MAE     : {pnl['mae_pct']:+.3f}%"
+                f"──────────────────────\n"
+                f"  MFE(최대수익): {pnl['mfe_pct']:+.3f}%\n"
+                f"  MAE(최대손실): {pnl['mae_pct']:+.3f}%"
             )
         else:
-            part2 = fmt_entry_guide(data, z_ref_global["z_entry"])
+            # 미진입 → 진입 타이밍 가이드 표시
+            part2 = fmt_entry_guide(data, z_entry_now)
         return part1 + part2
 
     else:
