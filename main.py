@@ -641,15 +641,27 @@ def check_exit_signal(data: pd.DataFrame, pos: dict) -> None:
 # 10. 일간 리포트
 # ─────────────────────────────────────────────
 def daily_report(data_ref: dict, z_ref: dict) -> None:
+    # 공유 변수 선언 (두 블록에서 모두 참조)
+    data    = None
+    z_entry = 1.0
+    pos     = {"active": False}
+    pnl     = None
+    latest  = None
 
-    # ── 텔레그램 발송 (반드시 실행) ─────────────
+    # ── 데이터 준비 ──────────────────────────
     try:
         data    = data_ref["data"]
         z_entry = z_ref.get("z_entry", 1.0)
         pos     = read_position()
         pnl     = calc_pnl(data, pos)
         latest  = data.iloc[-1]
+    except Exception as e:
+        print(f"[{_now()}] ❌ 데이터 준비 오류: {e}")
+        send_telegram(f"⚠️ 일간 리포트 데이터 오류\n{e}")
+        return  # 데이터 없으면 이후 진행 불가
 
+    # ── 텔레그램 발송 ────────────────────────
+    try:
         sig   = {1:"LONG 추천 📈", -1:"SHORT 추천 📉", 0:"NEUTRAL ⚪"}.get(
                  int(latest["sys_signal"]), "HOLD ⏸")
         part1 = (
@@ -660,7 +672,6 @@ def daily_report(data_ref: dict, z_ref: dict) -> None:
             f"🧭 추세     : {latest['regime']}\n"
             f"📌 시스템   : {sig}"
         )
-
         if pos["active"] and pnl:
             emoji = "📈" if pnl["pnl_pct"] >= 0 else "📉"
             part2 = (
@@ -683,12 +694,11 @@ def daily_report(data_ref: dict, z_ref: dict) -> None:
 
         send_telegram(part1 + part2)
         print(f"[{_now()}] ✅ 일간 리포트 텔레그램 발송 완료")
-
     except Exception as e:
-        print(f"[{_now()}] ❌ 일간 리포트 텔레그램 발송 오류: {e}")
-        send_telegram(f"⚠️ 일간 리포트 생성 오류\n{e}")
+        print(f"[{_now()}] ❌ 텔레그램 발송 오류: {e}")
+        send_telegram(f"⚠️ 리포트 발송 오류\n{e}")
 
-    # ── Google Sheets 로그 (실패해도 텔레그램에 영향 없음) ──
+    # ── Google Sheets 로그 (실패해도 텔레그램과 무관) ──
     try:
         pr = pnl or {}
         append_log([
@@ -711,7 +721,7 @@ def daily_report(data_ref: dict, z_ref: dict) -> None:
             pr.get("mfe_pct",""),
             pr.get("mae_pct",""),
         ])
-        print(f"[{_now()}] ✅ Google Sheets 로그 저장 완료")
+        print(f"[{_now()}] ✅ Sheets 로그 저장 완료")
     except Exception as e:
         print(f"[{_now()}] ⚠️ Sheets 저장 오류 (텔레그램 발송은 완료): {e}")
 
@@ -781,7 +791,10 @@ def main():
                     _warning_sent["LONG"]  = False
                     _exit_alerted = False
 
-                reply = handle_command(text, data_ref["data"], z_ref_global["z_entry"])
+                try:
+                    reply = handle_command(text, data_ref["data"], z_ref_global.get("z_entry", 1.0))
+                except Exception as e:
+                    reply = f"⚠️ 명령어 처리 오류: {e}"
                 send_telegram(reply)
 
         except KeyboardInterrupt:
