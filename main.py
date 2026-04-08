@@ -368,23 +368,102 @@ def fmt_entry_guide(data: pd.DataFrame, z_entry: float) -> str:
     short_gap    = round(short_thresh - z, 2)
     long_gap     = round(z - (-long_thresh), 2)
 
-    if z >= short_thresh:
-        zone = "🔴 SHORT 진입 구간"
-        zone_detail = f"이미 임계값({short_thresh}) 초과 → SHORT 진입 고려"
-    elif z >= z_entry:
-        zone = "🟠 SHORT 근접 대기"
-        zone_detail = f"임계값까지 Z {short_gap:+.2f} 남음 ({z:.2f} → {short_thresh})"
-    elif z <= -long_thresh:
-        zone = "🟢 LONG 진입 구간"
-        zone_detail = f"이미 임계값(-{long_thresh}) 하회 → LONG 진입 고려"
-    elif z <= -z_entry:
-        zone = "🟡 LONG 근접 대기"
-        zone_detail = f"임계값까지 Z {long_gap:+.2f} 남음 ({z:.2f} → -{long_thresh})"
+    # ── 1. 신호 강도 & 액션 단계 ─────────────────
+    if z > 0:
+        if z >= CONFIG["z_stoploss"]:
+            strength, strength_desc, action_step = "🚨 위험 (스톱로스 구간)", "추세 이탈 위험 — 진입 자제", "관망"
+        elif z >= short_thresh * 1.3:
+            strength, strength_desc, action_step = "🔴🔴 매우 강한 SHORT", f"Z {z:.2f} — 강하게 고평가, 강진입 고려", "강진입"
+        elif z >= short_thresh:
+            strength, strength_desc, action_step = "🔴 강한 SHORT", f"Z {z:.2f} — 고평가 확인, 진입 적기", "진입"
+        elif z >= z_entry:
+            strength, strength_desc, action_step = "🟠 SHORT 준비", f"Z {z:.2f} — 임계값까지 {short_gap:+.2f} 남음", "준비"
+        else:
+            strength, strength_desc, action_step = "⚪ 중립", f"Z {z:.2f} — 중립 구간", "관망"
     else:
-        zone = "⚪ 중립 구간 (관망)"
-        zone_detail = f"SHORT까지 Z {short_gap:+.2f} / LONG까지 Z {long_gap:+.2f} 남음"
+        if z <= -CONFIG["z_stoploss"]:
+            strength, strength_desc, action_step = "🚨 위험 (스톱로스 구간)", "추세 이탈 위험 — 진입 자제", "관망"
+        elif z <= -long_thresh * 1.3:
+            strength, strength_desc, action_step = "🟢🟢 매우 강한 LONG", f"Z {z:.2f} — 강하게 저평가, 강진입 고려", "강진입"
+        elif z <= -long_thresh:
+            strength, strength_desc, action_step = "🟢 강한 LONG", f"Z {z:.2f} — 저평가 확인, 진입 적기", "진입"
+        elif z <= -z_entry:
+            strength, strength_desc, action_step = "🟡 LONG 준비", f"Z {z:.2f} — 임계값까지 {long_gap:+.2f} 남음", "준비"
+        else:
+            strength, strength_desc, action_step = "⚪ 중립", f"Z {z:.2f} — 중립 구간", "관망"
 
-    recent = data["z_score"].iloc[-5:].values
+    gauge = {"관망":"⬜⬜⬜⬜ 관망","준비":"🟨⬜⬜⬜ 준비",
+             "진입":"🟧🟧⬜⬜ 진입","강진입":"🟥🟥🟥⬜ 강진입"}.get(action_step,"⬜⬜⬜⬜")
+
+    # ── 2. 진입 확률 (Z 위치 기반) ───────────────
+    # 과거에 현재와 같은 Z 구간에서 진입했을 때 수익이 난 비율
+    z_series = data["z_score"].dropna()
+    ret_series = data["ret_usdkrw"].dropna()
+
+    if z > 0:
+        # 같은 구간(z±0.3)에서 SHORT 진입 후 20일 내 Z가 0.3 이하로 내려온 비율
+        same_zone = z_series[(z_series >= z - 0.3) & (z_series <= z + 0.3)].index
+        win_count = 0
+        for idx in same_zone:
+            loc = z_series.index.get_loc(idx)
+            future = z_series.iloc[loc+1 : loc+21]
+            if len(future) > 0 and (future <= CONFIG["z_exit"]).any():
+                win_count += 1
+        entry_prob = round(win_count / len(same_zone) * 100, 1) if len(same_zone) > 0 else 0
+        prob_desc  = f"{entry_prob}% — 과거 유사 Z 구간에서 SHORT 성공률"
+    else:
+        same_zone = z_series[(z_series >= z - 0.3) & (z_series <= z + 0.3)].index
+        win_count = 0
+        for idx in same_zone:
+            loc = z_series.index.get_loc(idx)
+            future = z_series.iloc[loc+1 : loc+21]
+            if len(future) > 0 and (future >= -CONFIG["z_exit"]).any():
+                win_count += 1
+        entry_prob = round(win_count / len(same_zone) * 100, 1) if len(same_zone) > 0 else 0
+        prob_desc  = f"{entry_prob}% — 과거 유사 Z 구간에서 LONG 성공률"
+
+    prob_bar = "🟩" * int(entry_prob // 10) + "⬜" * (10 - int(entry_prob // 10))
+
+    # ── 3. Z 백분위 ───────────────────────────────
+    percentile = round((z_series < z).mean() * 100, 1)
+    pct_desc   = (
+        f"{percentile}%ile — 상위 {100-percentile:.1f}% 고평가 (역대 최고 수준에 근접)"
+        if z > 0 else
+        f"{percentile}%ile — 하위 {percentile:.1f}% 저평가 (역대 최저 수준에 근접)"
+    )
+
+    # ── 4. 예상 수익률 & 목표가 ───────────────────
+    gap_pct = round((spot - fair) / spot * 100, 2)
+    if z > 0:
+        exp_ret_full  = round((spot - fair) / spot * 100, 2)   # 공정가 완전 수렴
+        exp_ret_half  = round(exp_ret_full / 2, 2)             # 절반 수렴
+        target_full   = fair
+        target_half   = round((spot + fair) / 2, 1)
+    else:
+        exp_ret_full  = round((fair - spot) / spot * 100, 2)
+        exp_ret_half  = round(exp_ret_full / 2, 2)
+        target_full   = fair
+        target_half   = round((spot + fair) / 2, 1)
+
+    # ── 5. 평균회귀 예상 시나리오 ─────────────────
+    # 과거 유사 Z 구간에서 실제 회귀까지 걸린 평균 일수
+    revert_days_list = []
+    for idx in same_zone:
+        loc = z_series.index.get_loc(idx)
+        future = z_series.iloc[loc+1 : loc+60]
+        for d, fz in enumerate(future, start=1):
+            if abs(fz) <= CONFIG["z_exit"]:
+                revert_days_list.append(d)
+                break
+    avg_days = round(np.mean(revert_days_list), 1) if revert_days_list else None
+    scenario_desc = (
+        f"과거 유사 구간 평균 회귀 소요: {avg_days}일\n"
+        f"  → 예상 청산 시점: 진입 후 약 {avg_days}일 후"
+        if avg_days else "회귀 시나리오 데이터 부족"
+    )
+
+    # ── 6. 최근 5일 Z 흐름 ───────────────────────
+    recent    = data["z_score"].iloc[-5:].values
     trend_bar = ""
     for v in recent:
         if v > 1.5:    trend_bar += "🔴"
@@ -392,26 +471,43 @@ def fmt_entry_guide(data: pd.DataFrame, z_entry: float) -> str:
         elif v < -1.5: trend_bar += "🟢"
         elif v < -0.5: trend_bar += "🟡"
         else:          trend_bar += "⚪"
-    z_trend = "상승" if recent[-1] > recent[0] else "하락"
+    z_trend = "상승📈" if recent[-1] > recent[0] else "하락📉"
     z_delta = round(recent[-1] - recent[0], 2)
 
+    # ── 7. 변동성 ────────────────────────────────
     vol_20    = float(data["ret_usdkrw"].iloc[-20:].std() * (252**0.5) * 100)
     vol_label = "높음🔥" if vol_20 > 12 else ("보통🌤" if vol_20 > 7 else "낮음❄️")
-    gap_pct   = round((spot - fair) / fair * 100, 2)
-    gap_dir   = "고평가" if gap_pct > 0 else "저평가"
+    gap_dir   = "고평가🔴" if gap_pct > 0 else "저평가🟢"
+
+    direction_word = "SHORT" if z > 0 else "LONG"
 
     return (
         f"\n══════════════════════\n"
         f"📐 진입 타이밍 가이드\n"
         f"══════════════════════\n"
-        f"현재 위치 : {zone}\n"
-        f"상세      : {zone_detail}\n"
+        f"신호 강도 : {strength}\n"
+        f"상세      : {strength_desc}\n"
+        f"액션 단계 : {gauge}\n"
+        f"──────────────────────\n"
+        f"🎯 진입 확률\n"
+        f"  {prob_bar}\n"
+        f"  {prob_desc}\n"
         f"──────────────────────\n"
         f"💹 시세 분석\n"
         f"  현재환율 : {spot:.1f}원\n"
         f"  공정가   : {fair:.1f}원\n"
         f"  괴리     : {gap_pct:+.2f}% ({gap_dir})\n"
         f"  Z-score  : {z:.2f}  (최적임계 ±{z_entry})\n"
+        f"──────────────────────\n"
+        f"📊 과거 대비 Z 위치\n"
+        f"  {pct_desc}\n"
+        f"──────────────────────\n"
+        f"💰 예상 수익 ({direction_word})\n"
+        f"  목표① 공정가 완전수렴 : {target_full:.1f}원 → {exp_ret_full:+.2f}%\n"
+        f"  목표② 절반수렴 (보수적): {target_half:.1f}원 → {exp_ret_half:+.2f}%\n"
+        f"──────────────────────\n"
+        f"⏱ 평균회귀 시나리오\n"
+        f"  {scenario_desc}\n"
         f"──────────────────────\n"
         f"🧭 추세 분석\n"
         f"  Regime   : {regime}\n"
@@ -423,7 +519,7 @@ def fmt_entry_guide(data: pd.DataFrame, z_entry: float) -> str:
         f"  값: {' → '.join([f'{v:.2f}' for v in recent])}\n"
         f"──────────────────────\n"
         f"📊 변동성\n"
-        f"  연환산 변동성: {vol_20:.1f}%  ({vol_label})\n"
+        f"  연환산: {vol_20:.1f}%  ({vol_label})\n"
         f"──────────────────────\n"
         f"🎯 진입 시나리오\n"
         f"[SHORT] 조건: Z > {short_thresh}\n"
