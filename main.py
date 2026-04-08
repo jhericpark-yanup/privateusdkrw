@@ -323,14 +323,22 @@ def send_telegram(text: str) -> None:
     if not token or not chat_id:
         print(f"[Telegram 미설정]\n{text}\n")
         return
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-            timeout=10,
-        )
-    except Exception as e:
-        print(f"Telegram 전송 오류: {e}")
+
+    # 텔레그램 단일 메시지 4096자 제한 → 초과 시 분할 발송
+    MAX_LEN = 4000
+    chunks  = [text[i:i+MAX_LEN] for i in range(0, len(text), MAX_LEN)]
+
+    for chunk in chunks:
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
+                timeout=10,
+            )
+            if r.status_code != 200:
+                print(f"Telegram 전송 오류 {r.status_code}: {r.text[:200]}")
+        except Exception as e:
+            print(f"Telegram 전송 예외: {e}")
 
 def get_updates() -> list:
     global _last_update_id
