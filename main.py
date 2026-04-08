@@ -395,37 +395,46 @@ def fmt_entry_guide(data: pd.DataFrame, z_entry: float) -> str:
     gauge = {"관망":"⬜⬜⬜⬜ 관망","준비":"🟨⬜⬜⬜ 준비",
              "진입":"🟧🟧⬜⬜ 진입","강진입":"🟥🟥🟥⬜ 강진입"}.get(action_step,"⬜⬜⬜⬜")
 
-    # ── 2. 진입 확률 (Z 위치 기반) ───────────────
-    # 과거에 현재와 같은 Z 구간에서 진입했을 때 수익이 난 비율
+    # ── 공통 데이터 준비 ─────────────────────────
     z_series = data["z_score"].dropna()
-    ret_series = data["ret_usdkrw"].dropna()
+    z_arr    = z_series.values
 
-    if z > 0:
-        # 같은 구간(z±0.3)에서 SHORT 진입 후 20일 내 Z가 0.3 이하로 내려온 비율
-        same_zone = z_series[(z_series >= z - 0.3) & (z_series <= z + 0.3)].index
-        win_count = 0
-        for idx in same_zone:
-            loc = z_series.index.get_loc(idx)
-            future = z_series.iloc[loc+1 : loc+21]
-            if len(future) > 0 and (future <= CONFIG["z_exit"]).any():
-                win_count += 1
-        entry_prob = round(win_count / len(same_zone) * 100, 1) if len(same_zone) > 0 else 0
-        prob_desc  = f"{entry_prob}% — 과거 유사 Z 구간에서 SHORT 성공률"
-    else:
-        same_zone = z_series[(z_series >= z - 0.3) & (z_series <= z + 0.3)].index
-        win_count = 0
-        for idx in same_zone:
-            loc = z_series.index.get_loc(idx)
-            future = z_series.iloc[loc+1 : loc+21]
-            if len(future) > 0 and (future >= -CONFIG["z_exit"]).any():
-                win_count += 1
-        entry_prob = round(win_count / len(same_zone) * 100, 1) if len(same_zone) > 0 else 0
-        prob_desc  = f"{entry_prob}% — 과거 유사 Z 구간에서 LONG 성공률"
+    # ── 2. 진입 확률 (벡터 연산 — 빠른 버전) ────
+    idx_arr = np.where((z_arr >= z - 0.3) & (z_arr <= z + 0.3))[0]
 
-    prob_bar = "🟩" * int(entry_prob // 10) + "⬜" * (10 - int(entry_prob // 10))
+    win_count       = 0
+    revert_days_list = []
+    horizon         = 20
+
+    for loc in idx_arr:
+        future = z_arr[loc+1 : loc+horizon+1]
+        if len(future) == 0:
+            continue
+        if z > 0:
+            hit = np.where(future <= CONFIG["z_exit"])[0]
+        else:
+            hit = np.where(future >= -CONFIG["z_exit"])[0]
+        if len(hit) > 0:
+            win_count += 1
+            revert_days_list.append(int(hit[0]) + 1)
+
+    n_zone     = len(idx_arr)
+    entry_prob = round(win_count / n_zone * 100, 1) if n_zone > 0 else 0.0
+    prob_desc  = (
+        f"{entry_prob}% — 과거 유사 Z 구간 SHORT 성공률 (표본 {n_zone}건)"
+        if z > 0 else
+        f"{entry_prob}% — 과거 유사 Z 구간 LONG 성공률 (표본 {n_zone}건)"
+    )
+    prob_bar   = "🟩" * int(entry_prob // 10) + "⬜" * (10 - int(entry_prob // 10))
+    avg_days   = round(float(np.mean(revert_days_list)), 1) if revert_days_list else None
+    scenario_desc = (
+        f"과거 유사 구간 평균 회귀 소요: {avg_days}일\n"
+        f"  → 예상 청산 시점: 진입 후 약 {avg_days}일 후"
+        if avg_days else "회귀 시나리오 데이터 부족"
+    )
 
     # ── 3. Z 백분위 ───────────────────────────────
-    percentile = round((z_series < z).mean() * 100, 1)
+    percentile = round(float((z_arr < z).mean() * 100), 1)
     pct_desc   = (
         f"{percentile}%ile — 상위 {100-percentile:.1f}% 고평가 (역대 최고 수준에 근접)"
         if z > 0 else
@@ -433,36 +442,11 @@ def fmt_entry_guide(data: pd.DataFrame, z_entry: float) -> str:
     )
 
     # ── 4. 예상 수익률 & 목표가 ───────────────────
-    gap_pct = round((spot - fair) / spot * 100, 2)
-    if z > 0:
-        exp_ret_full  = round((spot - fair) / spot * 100, 2)   # 공정가 완전 수렴
-        exp_ret_half  = round(exp_ret_full / 2, 2)             # 절반 수렴
-        target_full   = fair
-        target_half   = round((spot + fair) / 2, 1)
-    else:
-        exp_ret_full  = round((fair - spot) / spot * 100, 2)
-        exp_ret_half  = round(exp_ret_full / 2, 2)
-        target_full   = fair
-        target_half   = round((spot + fair) / 2, 1)
-
-    # ── 5. 평균회귀 예상 시나리오 ─────────────────
-    # 과거 유사 Z 구간에서 실제 회귀까지 걸린 평균 일수
-    revert_days_list = []
-    for idx in same_zone:
-        loc = z_series.index.get_loc(idx)
-        future = z_series.iloc[loc+1 : loc+60]
-        for d, fz in enumerate(future, start=1):
-            if abs(fz) <= CONFIG["z_exit"]:
-                revert_days_list.append(d)
-                break
-    avg_days = round(np.mean(revert_days_list), 1) if revert_days_list else None
-    scenario_desc = (
-        f"과거 유사 구간 평균 회귀 소요: {avg_days}일\n"
-        f"  → 예상 청산 시점: 진입 후 약 {avg_days}일 후"
-        if avg_days else "회귀 시나리오 데이터 부족"
-    )
-
-    # ── 6. 최근 5일 Z 흐름 ───────────────────────
+    gap_pct      = round((spot - fair) / spot * 100, 2)
+    exp_ret_full = round(abs(spot - fair) / spot * 100, 2)
+    exp_ret_half = round(exp_ret_full / 2, 2)
+    target_full  = fair
+    target_half  = round((spot + fair) / 2, 1)
     recent    = data["z_score"].iloc[-5:].values
     trend_bar = ""
     for v in recent:
