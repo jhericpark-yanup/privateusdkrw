@@ -594,7 +594,6 @@ def handle_command(text: str, data: pd.DataFrame, z_entry: float) -> str:
     elif cmd == "/status":
         try:
             z_entry_now = z_ref_global.get("z_entry", 1.0)
-            pos    = read_position()
             latest = data.iloc[-1]
             z      = float(latest["z_score"])
             sig    = {1:"LONG 추천 📈", -1:"SHORT 추천 📉", 0:"NEUTRAL ⚪"}.get(
@@ -607,10 +606,20 @@ def handle_command(text: str, data: pd.DataFrame, z_entry: float) -> str:
                 f"🧭 추세     : {latest['regime']}\n"
                 f"📌 시스템   : {sig}"
             )
+
+            # Sheets 읽기 — 실패해도 기본값으로 진행
+            try:
+                pos = read_position()
+            except Exception as e:
+                print(f"[{_now()}] ⚠️ /status read_position 오류: {e}")
+                pos = {"active": False, "direction": "", "entry_price": 0.0,
+                       "entry_date": "", "capital": CONFIG["default_capital"]}
+
             if pos["active"]:
                 try:
                     pnl = calc_pnl(data, pos)
-                except Exception:
+                except Exception as e:
+                    print(f"[{_now()}] ⚠️ calc_pnl 오류: {e}")
                     pnl = None
 
                 if pnl:
@@ -642,11 +651,14 @@ def handle_command(text: str, data: pd.DataFrame, z_entry: float) -> str:
                 try:
                     part2 = fmt_entry_guide(data, z_entry_now)
                 except Exception as e:
-                    part2 = f"\n──────────────────────\n⏳ 포지션 미진입 (관망 중)\n진입 타이밍 가이드 오류: {e}"
+                    print(f"[{_now()}] ⚠️ fmt_entry_guide 오류: {e}")
+                    part2 = f"\n──────────────────────\n⏳ 포지션 미진입 (관망 중)\n오류: {e}"
 
+            print(f"[{_now()}] ✅ /status 응답 완료")
             return part1 + part2
 
         except Exception as e:
+            print(f"[{_now()}] ❌ /status 전체 오류: {e}")
             return f"⚠️ /status 처리 오류: {e}"
 
     else:
