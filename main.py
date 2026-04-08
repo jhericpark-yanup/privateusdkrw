@@ -512,44 +512,62 @@ def handle_command(text: str, data: pd.DataFrame, z_entry: float) -> str:
         return "✅ 포지션 청산 완료."
 
     elif cmd == "/status":
-        # z_entry 안전하게 읽기
-        z_entry_now = z_ref_global.get("z_entry", CONFIG.get("z_entry_default", 1.0))
-
-        pos    = read_position()
-        pnl    = calc_pnl(data, pos)
-        latest = data.iloc[-1]
-        z      = float(latest["z_score"])
-        sig    = {1:"LONG 추천 📈", -1:"SHORT 추천 📉", 0:"NEUTRAL ⚪"}.get(
-                  int(latest["sys_signal"]), "HOLD ⏸")
-        part1  = (
-            f"📊 [현재 상태] {_now()}\n══════════════════════\n"
-            f"💰 현재환율 : {float(latest['usdkrw']):.1f}\n"
-            f"⚖️ 공정가   : {float(latest['fair']):.1f}\n"
-            f"📐 괴리(Z)  : {z:.2f}\n"
-            f"🧭 추세     : {latest['regime']}\n"
-            f"📌 시스템   : {sig}"
-        )
-        if pnl:
-            # 포지션 보유 중 → 수익률 표시
-            emoji = "📈" if pnl["pnl_pct"] >= 0 else "📉"
-            part2 = (
-                f"\n══════════════════════\n💼 내 포지션\n"
-                f"──────────────────────\n"
-                f"  방향     : {pnl['direction']}\n"
-                f"  진입가   : {pnl['entry_price']:.1f}\n"
-                f"  현재가   : {pnl['current_price']:.1f}\n"
-                f"  보유기간 : {pnl['holding_days']}일\n"
-                f"  자본금   : {int(pnl['capital']):,}원\n"
-                f"{emoji} 수익률  : {pnl['pnl_pct']:+.3f}%\n"
-                f"💵 수익금액 : {int(pnl['pnl_krw']):+,}원\n"
-                f"──────────────────────\n"
-                f"  MFE(최대수익): {pnl['mfe_pct']:+.3f}%\n"
-                f"  MAE(최대손실): {pnl['mae_pct']:+.3f}%"
+        try:
+            z_entry_now = z_ref_global.get("z_entry", 1.0)
+            pos    = read_position()
+            latest = data.iloc[-1]
+            z      = float(latest["z_score"])
+            sig    = {1:"LONG 추천 📈", -1:"SHORT 추천 📉", 0:"NEUTRAL ⚪"}.get(
+                      int(latest["sys_signal"]), "HOLD ⏸")
+            part1  = (
+                f"📊 [현재 상태] {_now()}\n══════════════════════\n"
+                f"💰 현재환율 : {float(latest['usdkrw']):.1f}\n"
+                f"⚖️ 공정가   : {float(latest['fair']):.1f}\n"
+                f"📐 괴리(Z)  : {z:.2f}\n"
+                f"🧭 추세     : {latest['regime']}\n"
+                f"📌 시스템   : {sig}"
             )
-        else:
-            # 미진입 → 진입 타이밍 가이드 표시
-            part2 = fmt_entry_guide(data, z_entry_now)
-        return part1 + part2
+            if pos["active"]:
+                try:
+                    pnl = calc_pnl(data, pos)
+                except Exception:
+                    pnl = None
+
+                if pnl:
+                    emoji = "📈" if pnl["pnl_pct"] >= 0 else "📉"
+                    part2 = (
+                        f"\n══════════════════════\n💼 내 포지션\n"
+                        f"──────────────────────\n"
+                        f"  방향     : {pnl['direction']}\n"
+                        f"  진입가   : {pnl['entry_price']:.1f}\n"
+                        f"  현재가   : {pnl['current_price']:.1f}\n"
+                        f"  보유기간 : {pnl['holding_days']}일\n"
+                        f"  자본금   : {int(pnl['capital']):,}원\n"
+                        f"{emoji} 수익률  : {pnl['pnl_pct']:+.3f}%\n"
+                        f"💵 수익금액 : {int(pnl['pnl_krw']):+,}원\n"
+                        f"──────────────────────\n"
+                        f"  MFE(최대수익): {pnl['mfe_pct']:+.3f}%\n"
+                        f"  MAE(최대손실): {pnl['mae_pct']:+.3f}%"
+                    )
+                else:
+                    part2 = (
+                        f"\n══════════════════════\n💼 내 포지션\n"
+                        f"──────────────────────\n"
+                        f"  방향   : {pos['direction']}\n"
+                        f"  진입가 : {pos['entry_price']}\n"
+                        f"  날짜   : {pos['entry_date']}\n"
+                        f"  ⚠️ 수익률 계산 불가 (진입일 데이터 없음)"
+                    )
+            else:
+                try:
+                    part2 = fmt_entry_guide(data, z_entry_now)
+                except Exception as e:
+                    part2 = f"\n──────────────────────\n⏳ 포지션 미진입 (관망 중)\n진입 타이밍 가이드 오류: {e}"
+
+            return part1 + part2
+
+        except Exception as e:
+            return f"⚠️ /status 처리 오류: {e}"
 
     else:
         return (
@@ -791,10 +809,15 @@ def main():
                     _warning_sent["LONG"]  = False
                     _exit_alerted = False
 
+                if "data" not in data_ref:
+                    send_telegram("⚠️ 데이터 로딩 중입니다. 잠시 후 다시 시도해 주세요.")
+                    continue
+
                 try:
                     reply = handle_command(text, data_ref["data"], z_ref_global.get("z_entry", 1.0))
                 except Exception as e:
                     reply = f"⚠️ 명령어 처리 오류: {e}"
+                    print(f"[{_now()}] ❌ 명령어 오류 ({text}): {e}")
                 send_telegram(reply)
 
         except KeyboardInterrupt:
