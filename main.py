@@ -332,7 +332,7 @@ def send_telegram(text: str) -> None:
         try:
             r = requests.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                data={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"},
+                data={"chat_id": chat_id, "text": chunk},
                 timeout=10,
             )
             if r.status_code != 200:
